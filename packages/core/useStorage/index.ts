@@ -120,6 +120,13 @@ export interface UseStorageOptions<T> extends ConfigurableEventFilter, Configura
    * @default false
    */
   initOnMounted?: boolean
+
+  /**
+   * return the default value instead if the value is null
+   *
+   * @default false
+   */
+  preserveDefault?: boolean
 }
 
 export function useStorage(key: MaybeRefOrGetter<string>, defaults: MaybeRefOrGetter<string>, storage?: StorageLike, options?: UseStorageOptions<string>): RemovableRef<string>
@@ -152,6 +159,7 @@ export function useStorage<T extends (string | number | boolean | object | null)
       console.error(e)
     },
     initOnMounted,
+    // preserveDefault = false,
   } = options
 
   const data = (shallow ? shallowRef : deepRef)(typeof defaults === 'function' ? defaults() : defaults) as RemovableRef<T>
