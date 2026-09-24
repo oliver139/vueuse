@@ -1,0 +1,118 @@
+import { mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { defineComponent, h, nextTick } from 'vue'
+import { useMediaSession } from './index'
+
+function setupMediaSession() {
+  const mediaSession = {
+    metadata: null,
+    playbackState: 'none' as MediaSessionPlaybackState,
+    setActionHandler: vi.fn(),
+    setPositionState: vi.fn(),
+  }
+  const MediaMetadataMock = vi.fn(function (this: MediaMetadataInit, metadata: MediaMetadataInit) {
+    Object.assign(this, metadata)
+  })
+
+  vi.stubGlobal('navigator', { mediaSession })
+  vi.stubGlobal('MediaMetadata', MediaMetadataMock)
+
+  let session!: ReturnType<typeof useMediaSession>
+  const wrapper = mount(defineComponent({
+    setup() {
+      session = useMediaSession()
+      return () => h('div')
+    },
+  }))
+
+  return { MediaMetadataMock, mediaSession, session, wrapper }
+}
+
+describe('useMediaSession', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('should be defined', () => {
+    expect(useMediaSession).toBeDefined()
+  })
+
+  it('synchronizes metadata and playback state', async () => {
+    const { MediaMetadataMock, mediaSession, session, wrapper } = setupMediaSession()
+    session.title.value = 'Sintel'
+    session.artist.value = 'Blender Foundation'
+    session.album.value = 'Sintel'
+    session.artwork.value = [{ src: 'poster.webp', sizes: '640x360', type: 'image/webp' }]
+    session.duration.value = 120
+    session.playbackRate.value = 1
+    session.position.value = 10
+    session.playbackState.value = 'playing'
+
+    await nextTick()
+
+    expect(MediaMetadataMock).toHaveBeenCalledWith({
+      album: 'Sintel',
+      artist: 'Blender Foundation',
+      artwork: [{ src: 'poster.webp', sizes: '640x360', type: 'image/webp' }],
+      title: 'Sintel',
+    })
+    expect(mediaSession.metadata).toEqual({
+      album: 'Sintel',
+      artist: 'Blender Foundation',
+      artwork: [{ src: 'poster.webp', sizes: '640x360', type: 'image/webp' }],
+      title: 'Sintel',
+    })
+    expect(mediaSession.playbackState).toBe('playing')
+    expect(mediaSession.setPositionState).toHaveBeenLastCalledWith({
+      duration: 120,
+      playbackRate: 1,
+      position: 10,
+    })
+
+    wrapper.unmount()
+  })
+
+  it('registers and invokes action handlers', async () => {
+    const { mediaSession, session, wrapper } = setupMediaSession()
+    const play = vi.fn()
+    const seekTo = vi.fn()
+    session.actionHandlers.value = {
+      play,
+      seekto: seekTo,
+    }
+
+    await nextTick()
+
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('play', play)
+    expect(mediaSession.setActionHandler).toHaveBeenCalledWith('seekto', seekTo)
+
+    const registeredHandlers = new Map<string, MediaSessionActionHandler>()
+    mediaSession.setActionHandler.mock.calls.forEach(([action, handler]) => {
+      if (handler)
+        registeredHandlers.set(action, handler)
+    })
+    registeredHandlers.get('play')!({ action: 'play' })
+    registeredHandlers.get('seekto')!({ action: 'seekto', seekTime: 42 })
+    expect(play).toHaveBeenCalledOnce()
+    expect(seekTo).toHaveBeenCalledWith({ action: 'seekto', seekTime: 42 })
+
+    wrapper.unmount()
+  })
+
+  it('clears media session state and action handlers', async () => {
+    const { mediaSession, session, wrapper } = setupMediaSession()
+    session.actionHandlers.value = {
+      play: vi.fn(),
+      seekto: vi.fn(),
+    }
+
+    await nextTick()
+    session.clear()
+    await nextTick()
+
+    expect(mediaSession.playbackState).toBe('none')
+    expect(mediaSession.setActionHandler).toHaveBeenLastCalledWith('seekto', null)
+
+    wrapper.unmount()
+  })
+})
