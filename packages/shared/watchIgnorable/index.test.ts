@@ -1,8 +1,49 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ref as deepRef, nextTick, shallowRef, watch } from 'vue'
+import { debounceFilter } from '../utils'
 import { ignorableWatch, watchIgnorable } from './index'
 
 describe('watchIgnorable', () => {
+  it('preserves ignored updates with a debounced async callback', async () => {
+    vi.useFakeTimers()
+    const source = shallowRef(0)
+    const handled = vi.fn()
+    const cb = vi.fn(async (value: number) => {
+      try {
+        await Promise.reject(new Error(`failed ${value}`))
+      }
+      catch (error) {
+        handled(error)
+      }
+    })
+    const { ignoreUpdates, stop } = watchIgnorable(source, cb, {
+      eventFilter: debounceFilter(100, { maxWait: 150 }),
+    })
+    try {
+      ignoreUpdates(() => {
+        source.value = 1
+      })
+      await nextTick()
+      await vi.runAllTimersAsync()
+      expect(cb).not.toHaveBeenCalled()
+
+      source.value = 2
+      await nextTick()
+      await vi.advanceTimersByTimeAsync(80)
+      source.value = 3
+      await nextTick()
+      await vi.advanceTimersByTimeAsync(70)
+      expect(cb).toHaveBeenCalledOnce()
+      expect(cb.mock.calls[0][0]).toBe(3)
+      expect(handled).toHaveBeenCalledExactlyOnceWith(new Error('failed 3'))
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      stop()
+      vi.useRealTimers()
+    }
+  })
+
   it('export module', () => {
     expect(watchIgnorable).toBeDefined()
     expect(ignorableWatch).toBeDefined()

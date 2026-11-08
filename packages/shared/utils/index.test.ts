@@ -119,6 +119,104 @@ describe('filters', () => {
   })
 
   describe('debounceFilter', () => {
+    describe.each([false, true])('promise settlement (rejectOnCancel: %s)', (rejectOnCancel) => {
+      it.each([50, 500])('resolves the result when maxWait is %s', async (maxWait) => {
+        const cb = vi.fn(() => 'done')
+        const wrapped = createFilterWrapper(debounceFilter(100, { maxWait, rejectOnCancel }), cb)
+        const result = expect(wrapped()).resolves.toBe('done')
+
+        await Promise.all([result, vi.runAllTimersAsync()])
+        expect(cb).toHaveBeenCalledOnce()
+        expect(wrapped.isPending.value).toBe(false)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it.each([150, 500])('settles the latest call when maxWait is %s', async (maxWait) => {
+        const cb = vi.fn((value: string) => value)
+        const wrapped = createFilterWrapper(debounceFilter(100, { maxWait, rejectOnCancel }), cb)
+        const first = wrapped('first')
+        const cancelled = rejectOnCancel
+          ? expect(first).rejects.toBeUndefined()
+          : expect(first).resolves.toBeUndefined()
+        await vi.advanceTimersByTimeAsync(80)
+        const latest = expect(wrapped('latest')).resolves.toBe('latest')
+
+        await Promise.all([
+          cancelled,
+          latest,
+          vi.advanceTimersByTimeAsync(Math.min(maxWait, 180) - 80),
+        ])
+        expect(cb).toHaveBeenCalledExactlyOnceWith('latest')
+        expect(wrapped.isPending.value).toBe(false)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it.each([50, 500])('adopts async results and errors with maxWait %s', async (maxWait) => {
+        const error = new Error('callback failed')
+        const cb = vi.fn(async (fail: boolean) => {
+          await Promise.resolve()
+          if (fail)
+            throw error
+          return 'done'
+        })
+        const wrapped = createFilterWrapper(debounceFilter(100, { maxWait, rejectOnCancel }), cb)
+        const success = expect(wrapped(false)).resolves.toBe('done')
+        await Promise.all([success, vi.runAllTimersAsync()])
+
+        const failure = expect(wrapped(true)).rejects.toBe(error)
+        await Promise.all([failure, vi.runAllTimersAsync()])
+        expect(cb).toHaveBeenCalledTimes(2)
+      })
+    })
+
+    it.each(['cancel', 'call'] as const)('does not cancel running async work on %s', async (action) => {
+      let finish!: (value: string) => void
+      const cb = vi.fn(() => new Promise<string>((resolve) => {
+        finish = resolve
+      }))
+      const wrapped = createFilterWrapper(debounceFilter(100, { rejectOnCancel: true }), cb)
+      const first = expect(wrapped()).resolves.toBe('done')
+      await vi.advanceTimersByTimeAsync(100)
+      expect(wrapped.isPending.value).toBe(false)
+
+      if (action === 'call') {
+        const pending = expect(wrapped()).rejects.toBeUndefined()
+        wrapped.cancel()
+        await pending
+      }
+      else {
+        wrapped.cancel()
+      }
+      finish('done')
+      await first
+      expect(cb).toHaveBeenCalledOnce()
+    })
+
+    it.each(['timer', 'maxWait', 'flush'] as const)('preserves a reentrant call after %s', async (completion) => {
+      const filter = debounceFilter(100, { maxWait: completion === 'maxWait' ? 50 : 500, rejectOnCancel: true })
+      let next: Promise<number> | undefined
+      const cb = vi.fn<(value: number) => number>()
+      const wrapped = createFilterWrapper(filter, cb)
+      cb.mockImplementation((value) => {
+        if (value === 1)
+          next = wrapped(2)
+        return value
+      })
+      const first = expect(wrapped(1)).resolves.toBe(1)
+      if (completion === 'flush')
+        wrapped.flush()
+      await Promise.all([
+        first,
+        completion === 'flush' ? Promise.resolve() : vi.advanceTimersByTimeAsync(completion === 'maxWait' ? 50 : 100),
+      ])
+      expect(wrapped.isPending.value).toBe(true)
+      const second = expect(next).resolves.toBe(2)
+      await Promise.all([second, vi.runAllTimersAsync()])
+      expect(cb.mock.calls).toEqual([[1], [2]])
+      expect(wrapped.isPending.value).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
     it('should debounce', () => {
       const debouncedFilterSpy = vi.fn()
       const filter = createFilterWrapper(debounceFilter(1000), debouncedFilterSpy)

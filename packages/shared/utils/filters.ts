@@ -102,6 +102,23 @@ export function debounceFilter(ms: MaybeRefOrGetter<number>, options: DebounceFi
 
   let lastInvoker: () => void
 
+  const flush = () => {
+    if (!_pending.value)
+      return
+
+    // Completing an invocation must not cancel its promise.
+    const invoke = lastInvoker
+    const resolve = lastResolve
+    clearTimeout(timer)
+    clearTimeout(maxTimer)
+    timer = undefined
+    maxTimer = undefined
+    lastRejector = noop
+    lastResolve = noop
+    _pending.value = false
+    resolve(invoke())
+  }
+
   const handler = (invoke: AnyFn) => {
     const duration = toValue(ms)
     const maxDuration = toValue(options.maxWait)
@@ -126,23 +143,11 @@ export function debounceFilter(ms: MaybeRefOrGetter<number>, options: DebounceFi
       lastInvoker = invoke
       // Create the maxTimer. Clears the regular timer on invoke
       if (maxDuration && !maxTimer) {
-        maxTimer = setTimeout(() => {
-          if (timer)
-            _clearTimeout(timer)
-          maxTimer = undefined
-          _pending.value = false
-          resolve(lastInvoker())
-        }, maxDuration)
+        maxTimer = setTimeout(flush, maxDuration)
       }
 
       // Create the regular timer. Clears the max timer on invoke
-      timer = setTimeout(() => {
-        if (maxTimer)
-          _clearTimeout(maxTimer)
-        maxTimer = undefined
-        _pending.value = false
-        resolve(invoke())
-      }, duration)
+      timer = setTimeout(flush, duration)
     })
   }
 
@@ -159,25 +164,7 @@ export function debounceFilter(ms: MaybeRefOrGetter<number>, options: DebounceFi
       _pending.value = false
       lastResolve = noop
     },
-    flush: () => {
-      if (_pending.value) {
-        // Use native clearTimeout (not _clearTimeout) to avoid
-        // calling lastRejector — we resolve via lastResolve instead
-        if (timer) {
-          clearTimeout(timer)
-          timer = undefined
-        }
-        if (maxTimer) {
-          clearTimeout(maxTimer)
-          maxTimer = undefined
-        }
-        _pending.value = false
-        const resolve = lastResolve
-        lastRejector = noop
-        lastResolve = noop
-        resolve(lastInvoker())
-      }
-    },
+    flush,
     isPending: shallowReadonly(_pending),
   })
 

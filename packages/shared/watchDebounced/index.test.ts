@@ -1,3 +1,4 @@
+import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick, shallowRef } from 'vue'
 import { debouncedWatch, watchDebounced } from './index'
@@ -9,6 +10,51 @@ describe('watchDebounced', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it.each([50, 500])('forwards async callback errors with maxWait %s to Vue', async (maxWait) => {
+    const source = shallowRef(0)
+    const error = new Error('callback failed')
+    const errorHandler = vi.fn()
+    const wrapper = mount({
+      setup() {
+        watchDebounced(source, async () => {
+          await Promise.resolve()
+          throw error
+        }, { debounce: 100, maxWait })
+        return () => null
+      },
+    }, { global: { config: { errorHandler } } })
+    try {
+      source.value++
+      await nextTick()
+      await vi.runAllTimersAsync()
+      expect(errorHandler).toHaveBeenCalledOnce()
+      expect(errorHandler.mock.calls[0][0]).toBe(error)
+    }
+    finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('preserves source changes made by the debounced callback', async () => {
+    const source = shallowRef(0)
+    const cb = vi.fn((value: number) => {
+      if (value === 1)
+        source.value = 2
+    })
+    const stop = watchDebounced(source, cb, { debounce: 100, maxWait: 50, flush: 'sync' })
+    try {
+      source.value = 1
+      await vi.advanceTimersByTimeAsync(50)
+      expect(cb.mock.calls).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(cb.mock.calls.map(([value]) => value)).toEqual([1, 2])
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      stop()
+    }
   })
 
   it('should export module', () => {
